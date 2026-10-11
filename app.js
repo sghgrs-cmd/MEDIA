@@ -10,6 +10,15 @@ const state = {
   history: JSON.parse(localStorage.getItem('media_history') || '[]'),
 };
 
+// Check if running directly on local yt-dlp backend or custom server
+function getServerBase() {
+  const isDirectServer = window.location.hostname !== 'sghgrs-cmd.github.io' && 
+    (window.location.port === '5000' || window.location.hostname.includes('trycloudflare.com') || window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
+  if (isDirectServer) return window.location.origin;
+  if (state.server === 'custom' && state.customUrl) return state.customUrl.trim().replace(/\/$/, '');
+  return null;
+}
+
 // Known public endpoints with fallback
 const API_ENDPOINTS = [
   'https://cobalt.tools/api/json',
@@ -244,7 +253,30 @@ async function handleSingleDownload(url) {
 async function handlePlaylistDownload(url) {
   setStatus('Получение списка треков из плейлиста...', 'active');
   
-  // Extract playlist ID for YouTube
+  // 1. Try local or custom yt-dlp server first if available
+  const serverBase = getServerBase();
+  if (serverBase) {
+    try {
+      const res = await fetch(`${serverBase}/api/playlist`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url })
+      });
+      if (res.ok) {
+        const plData = await res.json();
+        if (plData.videos && plData.videos.length > 0) {
+          showPlaylist(plData);
+          setStatus(`Плейлист загружен через yt-dlp! Найдено ${plData.videos.length} треков`, 'success');
+          addToHistory(plData.title || 'Плейлист', url, 'playlist');
+          return;
+        }
+      }
+    } catch (e) {
+      console.warn('Custom backend playlist error, trying public APIs:', e);
+    }
+  }
+
+  // 2. Extract playlist ID for YouTube (public fallback)
   const plMatch = url.match(/[?&]list=([^#&?]+)/);
   const plId = plMatch ? plMatch[1] : null;
 
@@ -344,13 +376,28 @@ async function requestDownload(url, mode) {
     filenameStyle: 'pretty'
   };
 
-  if (state.server === 'custom' && state.customUrl) {
-    const res = await fetch(`${state.customUrl}/api/download`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload)
-    });
-    return await res.json();
+  const serverBase = getServerBase();
+  if (serverBase) {
+    try {
+      const res = await fetch(`${serverBase}/api/download`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.url) {
+          const fullUrl = data.url.startsWith('http') ? data.url : `${serverBase}${data.url}`;
+          return {
+            url: fullUrl,
+            title: data.title || data.filename || 'Медиа файл',
+            thumb: data.thumb || 'https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=300&q=80'
+          };
+        }
+      }
+    } catch (e) {
+      console.warn('Backend server download failed, falling back to public APIs:', e);
+    }
   }
 
   for (const endpoint of API_ENDPOINTS) {
