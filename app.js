@@ -427,23 +427,55 @@ async function requestDownload(url, mode) {
 }
 
 // Fallback Helper
+// Fallback Helper with Instant Mobile Download Gateways
 function provideFallbackDownload(url) {
   resultCard.style.display = 'block';
-  resultTitle.textContent = 'Готово к скачиванию';
-  resultMeta.textContent = 'Нажмите кнопку ниже для сохранения через мобильный шлюз:';
+  resultTitle.textContent = 'Готово к скачиванию на телефон';
+  resultMeta.textContent = state.mode === 'audio' 
+    ? `Формат: MP3 • ${state.bitrate} kbps` 
+    : `Формат: MP4 • ${state.resolution}p`;
   resultBadge.textContent = state.mode === 'audio' ? 'MP3' : (state.mode === 'playlist' ? 'Плейлист' : 'MP4');
-  platformTag.textContent = 'Прямой шлюз';
+  
+  const lower = url.toLowerCase();
+  let tag = 'Медиа';
+  if (lower.includes('youtube') || lower.includes('youtu.be')) tag = 'YouTube';
+  else if (lower.includes('vk')) tag = 'VK Видео';
+  else if (lower.includes('rutube')) tag = 'Rutube';
+  platformTag.textContent = tag;
+
   resultThumb.src = 'https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=300&q=80';
 
-  let directUrl = '';
-  if (url.includes('youtube.com') || url.includes('youtu.be')) {
-    directUrl = `https://cobalt.tools/#${encodeURIComponent(url)}`;
+  let primaryUrl = '';
+  let m1Url = '';
+  let m2Url = '';
+
+  if (lower.includes('youtube.com') || lower.includes('youtu.be')) {
+    const match = url.match(/(?:youtu\.be\/|youtube\.com\/(?:embed\/|v\/|watch\?v=|watch\?.+&v=))([\w-]{11})/);
+    const vId = match ? match[1] : '';
+    primaryUrl = `https://ssyoutube.com/watch?v=${vId || encodeURIComponent(url)}`;
+    m1Url = `https://en.savefrom.net/1-youtube-video-downloader-392cu.html?url=${encodeURIComponent(url)}`;
+    m2Url = `https://cobalt.tools/#${encodeURIComponent(url)}`;
   } else {
-    directUrl = `https://savefrom.net/#url=${encodeURIComponent(url)}`;
+    primaryUrl = `https://savefrom.net/#url=${encodeURIComponent(url)}`;
+    m1Url = `https://ru.savefrom.net/#url=${encodeURIComponent(url)}`;
+    m2Url = `https://cobalt.tools/#${encodeURIComponent(url)}`;
   }
 
-  directDownloadLink.href = directUrl;
-  directDownloadLink.textContent = 'Сохранить файл на телефон';
+  const directDownloadText = document.getElementById('directDownloadText');
+  const mirror1Link = document.getElementById('mirror1Link');
+  const mirror2Link = document.getElementById('mirror2Link');
+  const mirrorButtons = document.getElementById('mirrorButtons');
+
+  directDownloadLink.href = primaryUrl;
+  if (directDownloadText) {
+    directDownloadText.textContent = state.mode === 'audio' ? '⬇️ Скачать MP3 прямо сейчас' : '⬇️ Скачать MP4 прямо сейчас';
+  }
+  if (mirror1Link) mirror1Link.href = m1Url;
+  if (mirror2Link) mirror2Link.href = m2Url;
+  if (mirrorButtons) mirrorButtons.style.display = 'flex';
+
+  setStatus('Готово! Нажмите кнопку ниже для скачивания файла', 'success');
+  resultCard.scrollIntoView({ behavior: 'smooth' });
 }
 
 // Show Result
@@ -465,7 +497,12 @@ function showResult(data, sourceUrl) {
 
   if (data.thumb) resultThumb.src = data.thumb;
   directDownloadLink.href = data.url;
-  directDownloadLink.textContent = 'Сохранить на телефон / ПК';
+  const directDownloadText = document.getElementById('directDownloadText');
+  if (directDownloadText) directDownloadText.textContent = 'Сохранить файл на телефон / ПК';
+
+  const mirrorButtons = document.getElementById('mirrorButtons');
+  if (mirrorButtons) mirrorButtons.style.display = 'none';
+
   resultCard.scrollIntoView({ behavior: 'smooth' });
 }
 
