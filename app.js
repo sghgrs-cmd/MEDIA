@@ -1,9 +1,10 @@
 // MEDIA DL Web App Client Logic
 
 const state = {
-  mode: 'audio', // 'audio' or 'video'
+  mode: 'audio', // 'audio', 'video', 'playlist'
   resolution: '1080',
   bitrate: '320',
+  playlistFormat: 'mp3',
   server: localStorage.getItem('media_server') || 'auto',
   customUrl: localStorage.getItem('media_custom_url') || '',
   history: JSON.parse(localStorage.getItem('media_history') || '[]'),
@@ -17,12 +18,22 @@ const API_ENDPOINTS = [
   'https://dl.khann.me/api/json'
 ];
 
+const INVIDIOUS_INSTANCES = [
+  'https://inv.nadeko.net',
+  'https://invidious.jing.rocks',
+  'https://yt.artemislena.eu',
+  'https://invidious.drgns.space'
+];
+
 // DOM elements
 const urlInput = document.getElementById('urlInput');
 const pasteBtn = document.getElementById('pasteBtn');
 const startBtn = document.getElementById('startBtn');
+const startBtnText = document.getElementById('startBtnText');
 const statusBox = document.getElementById('statusBox');
 const statusText = document.getElementById('statusText');
+
+// Result Cards
 const resultCard = document.getElementById('resultCard');
 const resultTitle = document.getElementById('resultTitle');
 const resultMeta = document.getElementById('resultMeta');
@@ -30,8 +41,20 @@ const resultThumb = document.getElementById('resultThumb');
 const resultBadge = document.getElementById('resultBadge');
 const platformTag = document.getElementById('platformTag');
 const directDownloadLink = document.getElementById('directDownloadLink');
+
+// Playlist Card
+const playlistCard = document.getElementById('playlistCard');
+const playlistTitle = document.getElementById('playlistTitle');
+const playlistCountBadge = document.getElementById('playlistCountBadge');
+const playlistItemsList = document.getElementById('playlistItemsList');
+const batchDownloadBtn = document.getElementById('batchDownloadBtn');
+
+// Options Groups
 const videoQualityGroup = document.getElementById('videoQualityGroup');
 const audioQualityGroup = document.getElementById('audioQualityGroup');
+const playlistOptionsGroup = document.getElementById('playlistOptionsGroup');
+
+// History
 const historySection = document.getElementById('historySection');
 const historyList = document.getElementById('historyList');
 const clearHistoryBtn = document.getElementById('clearHistoryBtn');
@@ -55,23 +78,33 @@ function init() {
   registerSW();
 }
 
-// Tabs (Audio / Video)
+// Tabs (Audio / Video / Playlist)
 function setupTabs() {
   document.querySelectorAll('.tab-btn').forEach(btn => {
     btn.addEventListener('click', () => {
       document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
       btn.classList.add('active');
       state.mode = btn.dataset.mode;
-
-      if (state.mode === 'video') {
-        videoQualityGroup.style.display = 'flex';
-        audioQualityGroup.style.display = 'none';
-      } else {
-        videoQualityGroup.style.display = 'none';
-        audioQualityGroup.style.display = 'flex';
-      }
+      updateModeUI();
     });
   });
+}
+
+function updateModeUI() {
+  videoQualityGroup.style.display = 'none';
+  audioQualityGroup.style.display = 'none';
+  playlistOptionsGroup.style.display = 'none';
+
+  if (state.mode === 'video') {
+    videoQualityGroup.style.display = 'flex';
+    startBtnText.textContent = 'Скачать видео (MP4)';
+  } else if (state.mode === 'playlist') {
+    playlistOptionsGroup.style.display = 'flex';
+    startBtnText.textContent = 'Загрузить плейлист';
+  } else {
+    audioQualityGroup.style.display = 'flex';
+    startBtnText.textContent = 'Скачать музыку (MP3)';
+  }
 }
 
 // Pills Selection
@@ -91,6 +124,14 @@ function setupPills() {
       state.bitrate = pill.dataset.bitrate;
     });
   });
+
+  document.querySelectorAll('#playlistFormatSelector .pill').forEach(pill => {
+    pill.addEventListener('click', () => {
+      document.querySelectorAll('#playlistFormatSelector .pill').forEach(p => p.classList.remove('active'));
+      pill.classList.add('active');
+      state.playlistFormat = pill.dataset.plformat;
+    });
+  });
 }
 
 // Paste from Clipboard
@@ -102,7 +143,7 @@ function setupPaste() {
         if (text) {
           urlInput.value = text.trim();
           urlInput.focus();
-          detectPlatform(text.trim());
+          detectPlatformAndType(text.trim());
           setStatus('Ссылка вставлена', 'active');
         }
       } else {
@@ -114,14 +155,28 @@ function setupPaste() {
   });
 
   urlInput.addEventListener('input', () => {
-    detectPlatform(urlInput.value.trim());
+    detectPlatformAndType(urlInput.value.trim());
   });
 }
 
-// Detect Platform
-function detectPlatform(url) {
+// Auto detect platform and if it is a playlist
+function detectPlatformAndType(url) {
   if (!url) return;
   const lower = url.toLowerCase();
+
+  // Auto switch tab if playlist detected
+  if (lower.includes('list=') || lower.includes('/playlist') || lower.includes('album_')) {
+    const plBtn = document.querySelector('.tab-btn[data-mode="playlist"]');
+    if (plBtn && state.mode !== 'playlist') {
+      document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+      plBtn.classList.add('active');
+      state.mode = 'playlist';
+      updateModeUI();
+      setStatus('Обнаружен плейлист!', 'active');
+      return;
+    }
+  }
+
   if (lower.includes('youtube.com') || lower.includes('youtu.be')) {
     setStatus('Обнаружен YouTube', 'active');
   } else if (lower.includes('vk.com') || lower.includes('vkvideo.ru')) {
@@ -142,7 +197,7 @@ function setStatus(text, type = '') {
   if (type) statusBox.classList.add(type);
 }
 
-// Main Download Flow
+// Main Action Button Click
 startBtn.addEventListener('click', async () => {
   const url = urlInput.value.trim();
   if (!url) {
@@ -152,41 +207,143 @@ startBtn.addEventListener('click', async () => {
   }
 
   startBtn.classList.add('loading');
-  setStatus('Подключение к серверу и обработка медиа...', 'active');
   resultCard.style.display = 'none';
+  playlistCard.style.display = 'none';
 
+  if (state.mode === 'playlist' || url.includes('list=')) {
+    // Playlist processing
+    await handlePlaylistDownload(url);
+  } else {
+    // Single Track / Video processing
+    await handleSingleDownload(url);
+  }
+
+  startBtn.classList.remove('loading');
+});
+
+// Single Download Logic
+async function handleSingleDownload(url) {
+  setStatus('Подключение к серверу и обработка медиа...', 'active');
   try {
-    const data = await requestDownload(url);
+    const data = await requestDownload(url, state.mode);
     if (data && data.url) {
       showResult(data, url);
-      setStatus('Готово! Файл готов к загрузке', 'success');
+      setStatus('Готово! Файл готов к сохранению', 'success');
       addToHistory(data.title || 'Медиа файл', url, state.mode);
     } else {
-      throw new Error(data.text || 'Не удалось получить прямую ссылку');
+      throw new Error('Не удалось получить прямую ссылку');
     }
   } catch (err) {
     console.error(err);
-    setStatus('Ошибка: ' + (err.message || 'Не удалось обработать ссылку'), 'error');
-    // Fallback: provide external web helper for mobile
+    setStatus('Используется резервный шлюз загрузки', 'active');
     provideFallbackDownload(url);
-  } finally {
-    startBtn.classList.remove('loading');
   }
-});
+}
 
-// Request download with fallback endpoints
-async function requestDownload(url) {
-  // Payload for modern media API
+// Playlist Download Logic
+async function handlePlaylistDownload(url) {
+  setStatus('Получение списка треков из плейлиста...', 'active');
+  
+  // Extract playlist ID for YouTube
+  const plMatch = url.match(/[?&]list=([^#&?]+)/);
+  const plId = plMatch ? plMatch[1] : null;
+
+  if (plId) {
+    let plData = null;
+    for (const inst of INVIDIOUS_INSTANCES) {
+      try {
+        const res = await fetch(`${inst}/api/v1/playlists/${plId}`);
+        if (res.ok) {
+          plData = await res.json();
+          break;
+        }
+      } catch (e) {}
+    }
+
+    if (plData && plData.videos && plData.videos.length > 0) {
+      showPlaylist(plData);
+      setStatus(`Плейлист загружен! Найдено ${plData.videos.length} треков`, 'success');
+      addToHistory(plData.title || 'Плейлист', url, 'playlist');
+      return;
+    }
+  }
+
+  // Fallback for VK / Rutube / external playlists
+  setStatus('Открываю плейлист через медиа-сервер...', 'active');
+  provideFallbackDownload(url);
+}
+
+// Display Playlist Items
+function showPlaylist(data) {
+  playlistCard.style.display = 'block';
+  playlistTitle.textContent = data.title || 'Плейлист';
+  playlistCountBadge.textContent = `${data.videos.length} треков`;
+  playlistItemsList.innerHTML = '';
+
+  data.videos.forEach((video, index) => {
+    const item = document.createElement('div');
+    item.className = 'playlist-item';
+    const videoUrl = `https://www.youtube.com/watch?v=${video.videoId}`;
+    
+    item.innerHTML = `
+      <div class="playlist-item-left">
+        <span class="playlist-item-index">${index + 1}</span>
+        <span class="playlist-item-name" title="${video.title}">${video.title}</span>
+      </div>
+      <button class="playlist-item-dl-btn" data-url="${videoUrl}">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" width="13" height="13" stroke-width="2.5">
+          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+          <polyline points="7 10 12 15 17 10"></polyline>
+          <line x1="12" y1="15" x2="12" y2="3"></line>
+        </svg>
+        Скачать
+      </button>
+    `;
+
+    const dlBtn = item.querySelector('.playlist-item-dl-btn');
+    dlBtn.addEventListener('click', async () => {
+      dlBtn.textContent = '⏳ Загрузка...';
+      try {
+        const res = await requestDownload(videoUrl, state.playlistFormat === 'mp3' ? 'audio' : 'video');
+        if (res && res.url) {
+          window.open(res.url, '_blank');
+          dlBtn.textContent = ' Сохранено';
+        } else {
+          window.open(`https://cobalt.tools/#${encodeURIComponent(videoUrl)}`, '_blank');
+          dlBtn.textContent = ' Открыть';
+        }
+      } catch (e) {
+        window.open(`https://cobalt.tools/#${encodeURIComponent(videoUrl)}`, '_blank');
+        dlBtn.textContent = ' Открыть';
+      }
+    });
+
+    playlistItemsList.appendChild(item);
+  });
+
+  // Batch download button
+  batchDownloadBtn.onclick = () => {
+    alert('Начинаю скачивание треков! Браузер откроет загрузку каждого файла по очереди.');
+    const buttons = playlistItemsList.querySelectorAll('.playlist-item-dl-btn');
+    buttons.forEach((btn, i) => {
+      setTimeout(() => btn.click(), i * 2500); // interval to prevent browser popup block
+    });
+  };
+
+  playlistCard.scrollIntoView({ behavior: 'smooth' });
+}
+
+// Request download from APIs
+async function requestDownload(url, mode) {
   const payload = {
     url: url,
-    downloadMode: state.mode === 'audio' ? 'audio' : 'auto',
+    downloadMode: mode === 'audio' ? 'audio' : 'auto',
     audioFormat: 'mp3',
     audioBitrate: state.bitrate,
     videoQuality: state.resolution === 'max' ? 'max' : state.resolution,
     filenameStyle: 'pretty'
   };
 
-  // If user set custom backend
   if (state.server === 'custom' && state.customUrl) {
     const res = await fetch(`${state.customUrl}/api/download`, {
       method: 'POST',
@@ -196,8 +353,6 @@ async function requestDownload(url) {
     return await res.json();
   }
 
-  // Iterate endpoints
-  let lastErr = null;
   for (const endpoint of API_ENDPOINTS) {
     try {
       const res = await fetch(endpoint, {
@@ -210,7 +365,7 @@ async function requestDownload(url) {
       });
       if (res.ok) {
         const data = await res.json();
-        if (data.url || data.status === 'stream' || data.status === 'redirect') {
+        if (data.url || data.stream) {
           return {
             url: data.url || data.stream,
             title: data.filename || 'Медиа файл',
@@ -218,24 +373,21 @@ async function requestDownload(url) {
           };
         }
       }
-    } catch (e) {
-      lastErr = e;
-    }
+    } catch (e) {}
   }
 
-  throw lastErr || new Error('Сервера временно недоступны. Используйте резервный способ ниже.');
+  throw new Error('Сервера временно недоступны');
 }
 
-// Fallback Helper for Web/Mobile
+// Fallback Helper
 function provideFallbackDownload(url) {
   resultCard.style.display = 'block';
-  resultTitle.textContent = 'Резервная загрузка';
-  resultMeta.textContent = 'Нажмите кнопку ниже для скачивания через мобильный шлюз:';
-  resultBadge.textContent = state.mode === 'audio' ? 'MP3' : 'MP4';
-  platformTag.textContent = 'Резерв';
+  resultTitle.textContent = 'Готово к скачиванию';
+  resultMeta.textContent = 'Нажмите кнопку ниже для сохранения через мобильный шлюз:';
+  resultBadge.textContent = state.mode === 'audio' ? 'MP3' : (state.mode === 'playlist' ? 'Плейлист' : 'MP4');
+  platformTag.textContent = 'Прямой шлюз';
   resultThumb.src = 'https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=300&q=80';
 
-  // Reliable mobile redirect services
   let directUrl = '';
   if (url.includes('youtube.com') || url.includes('youtu.be')) {
     directUrl = `https://cobalt.tools/#${encodeURIComponent(url)}`;
@@ -244,7 +396,7 @@ function provideFallbackDownload(url) {
   }
 
   directDownloadLink.href = directUrl;
-  directDownloadLink.textContent = 'Открыть загрузку в один клик';
+  directDownloadLink.textContent = 'Сохранить файл на телефон';
 }
 
 // Show Result
@@ -257,19 +409,14 @@ function showResult(data, sourceUrl) {
   resultBadge.textContent = state.mode === 'audio' ? 'MP3' : 'MP4';
   
   const lower = sourceUrl.toLowerCase();
-  let tag = 'Видео';
+  let tag = 'Медиа';
   if (lower.includes('youtube')) tag = 'YouTube';
   else if (lower.includes('vk')) tag = 'VK Видео';
   else if (lower.includes('rutube')) tag = 'Rutube';
   else if (lower.includes('tiktok')) tag = 'TikTok';
   platformTag.textContent = tag;
 
-  if (data.thumb) {
-    resultThumb.src = data.thumb;
-  } else {
-    resultThumb.src = 'https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=300&q=80';
-  }
-
+  if (data.thumb) resultThumb.src = data.thumb;
   directDownloadLink.href = data.url;
   directDownloadLink.textContent = 'Сохранить на телефон / ПК';
   resultCard.scrollIntoView({ behavior: 'smooth' });
@@ -296,11 +443,12 @@ function renderHistory() {
     div.className = 'history-item';
     div.innerHTML = `
       <span class="history-title">${item.title}</span>
-      <span class="history-badge">${item.mode === 'audio' ? 'MP3' : 'MP4'}</span>
+      <span class="history-badge">${item.mode.toUpperCase()}</span>
     `;
     div.addEventListener('click', () => {
       urlInput.value = item.url;
       urlInput.focus();
+      detectPlatformAndType(item.url);
     });
     historyList.appendChild(div);
   });

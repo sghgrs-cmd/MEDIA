@@ -7,7 +7,7 @@
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="apple-mobile-web-app-title" content="MEDIA DL">
-  <title>MEDIA DL — Скачать видео и музыку</title>
+  <title>MEDIA DL — Скачать видео, музыку и плейлисты</title>
   <link rel="manifest" href="manifest.json">
   <link rel="stylesheet" href="style.css">
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -49,14 +49,25 @@
             <circle cx="6" cy="18" r="3"></circle>
             <circle cx="18" cy="16" r="3"></circle>
           </svg>
-          Музыка (MP3)
+          Музыка
         </button>
         <button class="tab-btn" data-mode="video">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <polygon points="23 7 16 12 23 17 23 7"></polygon>
             <rect x="1" y="5" width="15" height="14" rx="2" ry="2"></rect>
           </svg>
-          Видео (MP4)
+          Видео
+        </button>
+        <button class="tab-btn" data-mode="playlist">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="8" y1="6" x2="21" y2="6"></line>
+            <line x1="8" y1="12" x2="21" y2="12"></line>
+            <line x1="8" y1="18" x2="21" y2="18"></line>
+            <line x1="3" y1="6" x2="3.01" y2="6"></line>
+            <line x1="3" y1="12" x2="3.01" y2="12"></line>
+            <line x1="3" y1="18" x2="3.01" y2="18"></line>
+          </svg>
+          Плейлист
         </button>
       </div>
 
@@ -72,7 +83,7 @@
           type="url" 
           id="urlInput" 
           class="url-input" 
-          placeholder="Вставьте ссылку на видео или трек..."
+          placeholder="Вставьте ссылку на трек, видео или плейлист..."
           autocomplete="off"
           spellcheck="false"
         >
@@ -107,6 +118,15 @@
             <button class="pill" data-bitrate="128">128 kbps</button>
           </div>
         </div>
+
+        <!-- Playlist options -->
+        <div class="option-group" id="playlistOptionsGroup" style="display: none;">
+          <label class="option-label">Формат скачивания плейлиста:</label>
+          <div class="pill-selector" id="playlistFormatSelector">
+            <button class="pill active" data-plformat="mp3">Вся музыка (MP3 320k)</button>
+            <button class="pill" data-plformat="mp4">Все видео (MP4 720p)</button>
+          </div>
+        </div>
       </div>
 
       <!-- Download Button -->
@@ -117,7 +137,7 @@
             <polyline points="7 10 12 15 17 10"></polyline>
             <line x1="12" y1="15" x2="12" y2="3"></line>
           </svg>
-          Скачать файл
+          <span id="startBtnText">Скачать файл</span>
         </span>
         <div class="spinner" id="spinner"></div>
       </button>
@@ -129,7 +149,7 @@
       </div>
     </main>
 
-    <!-- Result Card -->
+    <!-- Single Item Result Card -->
     <div class="card result-card" id="resultCard" style="display: none;">
       <div class="result-header">
         <span class="badge" id="resultBadge">MP3 320 kbps</span>
@@ -152,6 +172,30 @@
       </a>
     </div>
 
+    <!-- Playlist Result Card -->
+    <div class="card playlist-card" id="playlistCard" style="display: none;">
+      <div class="playlist-header">
+        <div>
+          <div class="playlist-badge-row">
+            <span class="badge">Плейлист</span>
+            <span class="playlist-count-badge" id="playlistCountBadge">8 треков</span>
+          </div>
+          <h3 class="playlist-title" id="playlistTitle">Название плейлиста</h3>
+        </div>
+      </div>
+      <div class="playlist-actions">
+        <button class="batch-download-btn" id="batchDownloadBtn">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+            <polyline points="7 10 12 15 17 10"></polyline>
+            <line x1="12" y1="15" x2="12" y2="3"></line>
+          </svg>
+          Скачать все треки по очереди
+        </button>
+      </div>
+      <div class="playlist-items-list" id="playlistItemsList"></div>
+    </div>
+
     <!-- Supported Platforms Grid -->
     <div class="platforms-section">
       <h3 class="section-title">Поддерживаемые платформы</h3>
@@ -172,7 +216,7 @@
           <span class="platform-dot dz"></span> Дзен
         </div>
         <div class="platform-chip">
-          <span class="platform-dot ig"></span> Reels / Shorts
+          <span class="platform-dot ig"></span> Shorts/Reels
         </div>
       </div>
     </div>
@@ -203,18 +247,15 @@
         <div class="setting-item">
           <label>Сервер обработки:</label>
           <select id="serverSelect" class="custom-select">
-            <option value="auto">Автоматический выбор (Быстрый)</option>
-            <option value="https://api.cobalt.tools">Cobalt Official</option>
+            <option value="auto">Автоматический выбор (Рекомендуется)</option>
+            <option value="cobalt">Cobalt Public Gateway</option>
             <option value="custom">Свой сервер (yt-dlp)</option>
           </select>
+          <p class="setting-hint">В 99% случаев оставьте «Автоматический выбор» — сайт сам найдет рабочий шлюз.</p>
         </div>
         <div class="setting-item" id="customServerGroup" style="display: none;">
           <label>URL своего сервера:</label>
           <input type="url" id="customServerUrl" class="custom-input" placeholder="http://192.168.1.x:8000">
-        </div>
-        <div class="setting-item">
-          <label>Уведомления после загрузки:</label>
-          <input type="checkbox" id="notifyCheckbox" checked>
         </div>
       </div>
       <div class="modal-footer">
